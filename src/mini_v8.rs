@@ -186,7 +186,7 @@ impl MiniV8 {
 
         self.scope(|scope| {
             let callback = Box::new(func);
-            let callback_info = CallbackInfo { mv8: self.clone(), callback };
+            let callback_info = CallbackInfo { callback };
             let ptr = Box::into_raw(Box::new(callback_info));
             let ext = v8::External::new(scope, ptr as _);
 
@@ -199,12 +199,12 @@ impl MiniV8 {
                 let ext = v8::Local::<v8::External>::try_from(data).unwrap();
                 let callback_info_ptr = ext.value() as *mut CallbackInfo;
                 let callback_info = unsafe { &mut *callback_info_ptr };
-                let CallbackInfo { mv8, callback } = callback_info;
+                let CallbackInfo { callback } = callback_info;
                 let ptr = scope as *mut v8::HandleScope;
                 // We can erase the lifetime of the `v8::HandleScope` safely because it only lives
                 // on the interface stack during the current block:
                 let ptr: *mut v8::HandleScope<'static> = unsafe { std::mem::transmute(ptr) };
-                mv8.interface.push(ptr);
+                let mv8 = MiniV8 { interface: Interface::new_scopped(ptr) };
                 let this = Value::from_v8_value(&mv8, scope, fca.this().into());
                 let len = fca.length();
                 let mut args = Vec::with_capacity(len as usize);
@@ -220,7 +220,6 @@ impl MiniV8 {
                         scope.throw_exception(exception);
                     },
                 };
-                mv8.interface.pop();
             };
 
             let value = v8::Function::builder(v8_func).data(ext.into()).build(scope).unwrap();
@@ -315,6 +314,10 @@ impl Interface {
 
     fn new(isolate: v8::OwnedIsolate) -> Interface {
         Interface(Rc::new(RefCell::new(vec![Rc::new(RefCell::new(InterfaceEntry::Isolate(isolate)))])))
+    }
+
+    fn new_scopped(handle_scope:*mut v8::HandleScope<'static>) -> Interface {
+        Interface(Rc::new(RefCell::new(vec![Rc::new(RefCell::new(InterfaceEntry::HandleScope(handle_scope)))])))
     }
 
     fn push(&self, handle_scope: *mut v8::HandleScope<'static>) {
@@ -436,7 +439,6 @@ fn add_finalizer<T: 'static>(
 type Callback = Box<dyn Fn(&MiniV8, Value, Values) -> Result<Value>>;
 
 struct CallbackInfo {
-    mv8: MiniV8,
     callback: Callback,
 }
 
